@@ -96,6 +96,53 @@ extension ReconnectRouteSelectionTests {
         #expect(!store.isReconnectingStoredMac)
     }
 
+    @Test func lifecycleReconnectReturnsAtHardDeadlineWhenStoreRestoreHangs() async throws {
+        let router = LivenessHostRouter()
+        let box = TransportBox()
+        let factory = KindRecordingTransportFactory(router: router, box: box)
+        var runtime = LivenessTestRuntime(
+            transportFactory: factory,
+            now: Date.init,
+            supportedRouteKinds: [.iroh]
+        )
+        runtime.reconnectAttemptDeadlineNanoseconds = 100_000_000
+        let pairedStore = DelayedTeamPairedMacStore(
+            recordsByTeam: ["": []],
+            blockedTeams: [""]
+        )
+        let store = MobileShellComposite(
+            runtime: runtime,
+            isSignedIn: true,
+            pairedMacStore: pairedStore,
+            identityProvider: StaticIdentityProvider(userID: "user-1"),
+            reachability: AlwaysOnlineReachability(),
+            pairingHintDefaults: UserDefaults(
+                suiteName: "reconnect-lifecycle-deadline-\(UUID().uuidString)"
+            )!,
+            storedMacReconnectRestoringDeadlineSeconds: 5
+        )
+
+        let reconnect = Task {
+            await store.reconnectActiveMacIfAvailable(stackUserID: "user-1")
+        }
+        await pairedStore.waitUntilLoadStarted(teamID: nil)
+        let returned = await MobileShellComposite.raceAgainstDeadline(
+            nanoseconds: 1_000_000_000
+        ) {
+            await reconnect.value
+        }
+
+        #expect(returned.value == false, "lifecycle callers must return at the shared hard deadline")
+        #expect(store.didFinishStoredMacReconnectAttempt)
+        #expect(!store.isReconnectingStoredMac)
+
+        await pairedStore.release(teamID: nil)
+        _ = await reconnect.value
+        if let abandoned = returned.abandoned {
+            _ = await abandoned.value
+        }
+    }
+
     @Test func hungRedialSettlesAtDeadlineAndUnfreezesRecovery() async throws {
         let clock = TestClock()
         let router = LivenessHostRouter()

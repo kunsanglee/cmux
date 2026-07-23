@@ -173,6 +173,24 @@ describe("client config env validation", () => {
     expect(result.stderr).not.toContain("CMUX_RELAY_TOKEN_RATE_LIMIT_ID");
   });
 
+  test("keeps the self-hosted relay limiter optional in production", () => {
+    const {
+      CMUX_RELAY_TOKEN_RATE_LIMIT_ID: _unusedRateLimitID,
+      ...relaySigningEnv
+    } = requiredRelayProductionEnv;
+    const result = importEnv({
+      ...requiredEnv,
+      ...requiredIrohProductionEnv,
+      ...relaySigningEnv,
+      VERCEL: "1",
+      VERCEL_ENV: "production",
+      CMUX_CLIENT_CONFIG_RATE_LIMIT_ID: "client-config-rule",
+      CMUX_ANALYTICS_RATE_LIMIT_ID: "analytics-rule",
+    });
+
+    expect(result.exitCode).toBe(0);
+  });
+
   test("keeps Vercel previews credential-free for the self-hosted relay fleet", () => {
     const result = importEnv({
       ...requiredEnv,

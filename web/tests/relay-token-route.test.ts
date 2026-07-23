@@ -307,7 +307,7 @@ describe("POST /api/relay/token", () => {
     expect(invalid.status).toBe(400);
   });
 
-  test("rate limits per account and endpoint and fails closed", async () => {
+  test("rate limits per account and endpoint while optional rules fail open", async () => {
     let key: string | undefined;
     let checks = 0;
     const limited = await handleRelayTokenRequest(
@@ -344,10 +344,32 @@ describe("POST /api/relay/token", () => {
     expect(invalid.status).toBe(400);
     expect(checks).toBe(1);
 
-    const unavailable = await handleRelayTokenRequest(
+    let optionalRuleChecks = 0;
+    const optionalRule = await handleRelayTokenRequest(
       request({ endpointId: ENDPOINT_ID }),
-      deps({ isVercel: () => true, rateLimitRuleId: () => undefined }),
+      deps({
+        isVercel: () => true,
+        rateLimitRuleId: () => undefined,
+        checkRateLimit: async () => {
+          optionalRuleChecks += 1;
+          return { rateLimited: false };
+        },
+      }),
     );
-    expect(unavailable.status).toBe(503);
+    expect(optionalRule.status).toBe(200);
+    expect(optionalRuleChecks).toBe(0);
+
+    const deletedRule = await handleRelayTokenRequest(
+      request({ endpointId: ENDPOINT_ID }),
+      deps({
+        isVercel: () => true,
+        rateLimitRuleId: () => "deleted-relay-token-rule",
+        checkRateLimit: async () => ({
+          rateLimited: false,
+          error: "not-found",
+        }),
+      }),
+    );
+    expect(deletedRule.status).toBe(200);
   });
 });
