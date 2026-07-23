@@ -1,7 +1,6 @@
 import * as Effect from "effect/Effect";
 
 import {
-  RelayConfigurationError,
   RelayRateLimitError,
   type RelayServiceError,
 } from "./errors";
@@ -32,15 +31,13 @@ export function enforceRelayRateLimit(input: {
   readonly check: RelayRateLimitCheck;
   readonly isVercel?: boolean;
   readonly retryAfterSeconds?: number;
-}): Effect.Effect<void, RelayConfigurationError | RelayRateLimitError> {
+}): Effect.Effect<void, RelayRateLimitError> {
   if (!(input.isVercel ?? process.env.VERCEL === "1")) {
     return Effect.void;
   }
   const ruleId = input.ruleId?.trim();
   if (!ruleId) {
-    return Effect.fail(
-      new RelayConfigurationError({ code: "rate_limit_not_configured" }),
-    );
+    return Effect.void;
   }
   return Effect.tryPromise({
     try: () => input.check(ruleId, {
@@ -63,6 +60,12 @@ export function enforceRelayRateLimit(input: {
             ? { retryAfterSeconds }
             : {}),
         }));
+      }
+      if (error === "not-found") {
+        // A deleted optional rule means the operator disabled this limiter.
+        // Authentication, endpoint binding, and short credential TTLs remain.
+        console.warn("relay rate-limit rule not found; failing open");
+        return Effect.void;
       }
       if (error) {
         return Effect.fail(

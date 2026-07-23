@@ -371,5 +371,18 @@ describe("POST /api/relay/token", () => {
       }),
     );
     expect(deletedRule.status).toBe(200);
+
+    const unavailableRule = await handleRelayTokenRequest(
+      request({ endpointId: ENDPOINT_ID }),
+      deps({
+        isVercel: () => true,
+        rateLimitRuleId: () => "unavailable-relay-token-rule",
+        checkRateLimit: async () => ({
+          rateLimited: false,
+          error: "firewall_unavailable",
+        }),
+      }),
+    );
+    expect(unavailableRule.status).toBe(503);
   });
 });

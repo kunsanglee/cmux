@@ -127,17 +127,22 @@ describe("client config env validation", () => {
     expect(result.exitCode).toBe(0);
   });
 
-  test("requires the Iroh limiter id in explicit Vercel production deployments", () => {
+  test("keeps the Iroh limiter id optional in explicit Vercel production deployments", () => {
+    const irohRuntimeEnv: Record<string, string> = {
+      ...requiredIrohProductionEnv,
+    };
+    delete irohRuntimeEnv.CMUX_IROH_RATE_LIMIT_ID;
     const result = importEnv({
       ...requiredEnv,
+      ...irohRuntimeEnv,
+      ...requiredRelayProductionEnv,
       VERCEL: "1",
       VERCEL_ENV: "production",
       CMUX_CLIENT_CONFIG_RATE_LIMIT_ID: "client-config-rule",
       CMUX_ANALYTICS_RATE_LIMIT_ID: "analytics-rule",
     });
 
-    expect(result.exitCode).not.toBe(0);
-    expect(result.stderr).toContain("CMUX_IROH_RATE_LIMIT_ID is required");
+    expect(result.exitCode).toBe(0);
   });
 
   test("requires the complete Iroh trust-broker configuration in production", () => {
@@ -155,7 +160,7 @@ describe("client config env validation", () => {
     expect(result.stderr).not.toContain("CMUX_IROH_MINT_HMAC_SECRET_B64 is required");
   });
 
-  test("requires the self-hosted relay signing and rate-limit configuration in production", () => {
+  test("requires the self-hosted relay signing configuration in production", () => {
     const result = importEnv({
       ...requiredEnv,
       ...requiredIrohProductionEnv,
@@ -174,10 +179,10 @@ describe("client config env validation", () => {
   });
 
   test("keeps the self-hosted relay limiter optional in production", () => {
-    const {
-      CMUX_RELAY_TOKEN_RATE_LIMIT_ID: _unusedRateLimitID,
-      ...relaySigningEnv
-    } = requiredRelayProductionEnv;
+    const relaySigningEnv: Record<string, string> = {
+      ...requiredRelayProductionEnv,
+    };
+    delete relaySigningEnv.CMUX_RELAY_TOKEN_RATE_LIMIT_ID;
     const result = importEnv({
       ...requiredEnv,
       ...requiredIrohProductionEnv,

@@ -249,7 +249,8 @@ export const env = createEnv({
     CMUX_IROH_DEV_BINDING_DEVICE_LIMIT: irohBindingLimit.optional(),
     // Self-hosted relay fleet. Preview and local builds remain credential-free,
     // while every deployed non-preview runtime must be able to mint endpoint-
-    // bound credentials, sign the fleet policy, and enforce its account limit.
+    // bound credentials and sign the fleet policy. The Vercel firewall limiter
+    // is optional because deleting that external rule must not disable Iroh.
     CMUX_RELAY_JWT_PRIVATE_KEY_PEM: requireVercelRelayValue(
       z.string().min(64).max(16_384),
     ),
@@ -259,7 +260,7 @@ export const env = createEnv({
     CMUX_RELAY_POLICY_PRIVATE_KEY_PEM: requireVercelRelayValue(
       z.string().min(64).max(16_384),
     ),
-    CMUX_RELAY_TOKEN_RATE_LIMIT_ID: requireVercelRelayValue(),
+    CMUX_RELAY_TOKEN_RATE_LIMIT_ID: z.string().min(1).optional(),
     // Optional dedicated rule. Preferences deliberately fall back to the token
     // rule so existing deployments keep one shared account-scoped limiter.
     CMUX_RELAY_PREFERENCES_RATE_LIMIT_ID: z.string().min(1).optional(),
