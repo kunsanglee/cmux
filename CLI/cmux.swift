@@ -771,7 +771,8 @@ final class ClaudeHookSessionStore {
         launchCommand: AgentHookLaunchCommandRecord? = nil,
         agentLifecycle: AgentHibernationLifecycleState? = nil,
         runtimeStatus: AgentHookRuntimeStatus? = nil,
-        updateRuntimeStatus: Bool = false
+        updateRuntimeStatus: Bool = false,
+        allowResumedProcessReplacement: Bool = false
     ) throws -> Bool {
         let normalized = normalizeSessionId(sessionId)
         guard !normalized.isEmpty else { return false }
@@ -784,7 +785,11 @@ final class ClaudeHookSessionStore {
                 surfaceId: surfaceId,
                 now: now
             )
-            if codexSessionStartIsStale(record, incomingPID: pid) {
+            if codexSessionStartIsStale(
+                record,
+                incomingPID: pid,
+                allowResumedProcessReplacement: allowResumedProcessReplacement
+            ) {
                 return false
             }
             clearCodexSessionStartTurnState(on: &record)
@@ -863,7 +868,8 @@ final class ClaudeHookSessionStore {
     func codexSessionStartIsStale(
         sessionId: String,
         incomingPID: Int?,
-        includeTerminalPromptTurnIds: Bool = true
+        includeTerminalPromptTurnIds: Bool = true,
+        allowResumedProcessReplacement: Bool = false
     ) throws -> Bool {
         let normalized = normalizeSessionId(sessionId)
         guard !normalized.isEmpty else { return false }
@@ -872,7 +878,8 @@ final class ClaudeHookSessionStore {
             return codexSessionStartIsStale(
                 record,
                 incomingPID: incomingPID,
-                includeTerminalPromptTurnIds: includeTerminalPromptTurnIds
+                includeTerminalPromptTurnIds: includeTerminalPromptTurnIds,
+                allowResumedProcessReplacement: allowResumedProcessReplacement
             )
         }
     }
@@ -1004,8 +1011,18 @@ final class ClaudeHookSessionStore {
     private func codexSessionStartIsStale(
         _ record: ClaudeHookSessionRecord,
         incomingPID: Int?,
-        includeTerminalPromptTurnIds: Bool = true
+        includeTerminalPromptTurnIds: Bool = true,
+        allowResumedProcessReplacement: Bool = false
     ) -> Bool {
+        // A wrapper-confirmed resume is the only SessionStart allowed to replace
+        // an interrupted active turn. Requiring a different PID preserves the
+        // stale same-process guard for delayed or nested Codex hook events.
+        if allowResumedProcessReplacement,
+           let incomingPID,
+           let existingPID = record.pid,
+           incomingPID != existingPID {
+            return false
+        }
         if max(record.activePromptDepth ?? 0, record.activePromptTurnIds?.count ?? 0) > 0 {
             return true
         }
@@ -27787,9 +27804,16 @@ struct CMUXCLI {
         // user's shell (fish/csh/tcsh included), so token-bearing commands are wrapped
         // in `/bin/sh -c '…'` to parse everywhere; the cwd guard below stays outside so
         // cd-prefix rewriting keeps composing. https://github.com/manaflow-ai/cmux/issues/5639
-        var command = kind == "claude"
-            ? AgentResumeArgv.renderedPortableClaudeResumeShellCommand(parts: resumeCommandParts, quote: cliShellQuote)
-            : resumeCommandParts.map(cliShellQuote).joined(separator: " ")
+        let commandRenderer: ([String], (String) -> String) -> String
+        switch kind {
+        case "claude":
+            commandRenderer = AgentResumeArgv.renderedPortableClaudeResumeShellCommand
+        case "codex":
+            commandRenderer = AgentResumeArgv.renderedPortableCodexResumeShellCommand
+        default:
+            commandRenderer = { parts, quote in parts.map(quote).joined(separator: " ") }
+        }
+        var command = commandRenderer(resumeCommandParts, cliShellQuote)
         if kind == "hermes-agent" {
             command = hermesAgentSubrouterResumeCommand(
                 command,
@@ -30482,6 +30506,8 @@ export default CMUXSessionRestore;
                 fallbackKind: def.name,
                 cwd: hookCwd ?? mapped?.cwd
             )
+            let isCodexResumeRebind = def.name == "codex"
+                && (input.rawObject?["cmux_resume_rebind"] as? Bool) == true
             let resumeLaunchCommand = preferredAgentHookResumeLaunchCommand(
                 kind: def.name, current: launchCommand, mapped: mapped,
                 transcriptPath: input.transcriptPath ?? mapped?.transcriptPath, currentPID: pid
@@ -30490,7 +30516,8 @@ export default CMUXSessionRestore;
                 def.name == "codex" && ((try? store.codexSessionStartIsStale(
                     sessionId: sessionId,
                     incomingPID: pid,
-                    includeTerminalPromptTurnIds: false
+                    includeTerminalPromptTurnIds: false,
+                    allowResumedProcessReplacement: isCodexResumeRebind
                 )) == true)
             }
             if !sessionId.isEmpty {
@@ -30506,7 +30533,8 @@ export default CMUXSessionRestore;
                         launchCommand: resumeLaunchCommand,
                         agentLifecycle: .unknown,
                         runtimeStatus: suppressVisibleMutations ? nil : .running,
-                        updateRuntimeStatus: !suppressVisibleMutations
+                        updateRuntimeStatus: !suppressVisibleMutations,
+                        allowResumedProcessReplacement: isCodexResumeRebind
                     )) ?? false
                 } else {
                     try? store.upsert(
@@ -34524,6 +34552,12 @@ export default CMUXSessionRestore;
                 // (Resources/bin/cmux-codex-wrapper) splices to inject cmux's
                 // fire-and-forget hooks for one invocation. No socket required.
                 try emitCodexWrapperInjectArgs()
+                return true
+            case "inject-resume-args" where def.name == "codex":
+                // Hidden: emit the NUL-separated trust override that the
+                // wrapper appends after `codex resume` arguments. Codex ignores
+                // this project decision when it is placed before the subcommand.
+                emitCodexWrapperResumeArgs()
                 return true
             case "install":
                 try installHooksForAgent(def, arguments: actionArgs)
