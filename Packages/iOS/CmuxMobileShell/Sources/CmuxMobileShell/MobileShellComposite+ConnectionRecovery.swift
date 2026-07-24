@@ -918,15 +918,20 @@ extension MobileShellComposite {
                 Task {
                     once.finish(await operationTask.value)
                 }
-                Task {
-                    // Intentional bounded deadline timer (not a polling wait);
-                    // cancellation of the race cancels the operation via the
-                    // handler above, and this timer resolves the race at the
-                    // bound either way.
-                    try? await ContinuousClock().sleep(for: .nanoseconds(Int64(nanoseconds)))
+                // A one-shot cancellation-aware source emits the actual
+                // deadline signal. This avoids parking a Swift task in a
+                // sleep while still bounding an FFI dial that can ignore
+                // cooperative cancellation.
+                let deadline = DispatchSource.makeTimerSource(queue: .main)
+                deadline.schedule(
+                    deadline: .now() + .nanoseconds(Int(clamping: nanoseconds))
+                )
+                deadline.setEventHandler {
                     operationTask.cancel()
                     once.finish(nil)
                 }
+                deadline.resume()
+                once.installDeadline(deadline)
             }
         } onCancel: {
             operationTask.cancel()
@@ -944,16 +949,35 @@ extension MobileShellComposite {
 private final class RaceContinuationOnce<Value: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: CheckedContinuation<Value?, Never>?
+    private var deadline: (any DispatchSourceTimer)?
 
     init(_ continuation: CheckedContinuation<Value?, Never>) {
         self.continuation = continuation
+    }
+
+    /// Retains the one-shot source until either side wins. If the operation
+    /// already finished, cancel the source immediately instead of leaving a
+    /// detached deadline callback alive.
+    func installDeadline(_ deadline: any DispatchSourceTimer) {
+        lock.lock()
+        let shouldRetain = continuation != nil
+        if shouldRetain {
+            self.deadline = deadline
+        }
+        lock.unlock()
+        if !shouldRetain {
+            deadline.cancel()
+        }
     }
 
     func finish(_ value: Value?) {
         lock.lock()
         let continuation = self.continuation
         self.continuation = nil
+        let deadline = self.deadline
+        self.deadline = nil
         lock.unlock()
+        deadline?.cancel()
         continuation?.resume(returning: value)
     }
 }
